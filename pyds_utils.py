@@ -33,6 +33,43 @@ from sklearn.model_selection import RandomizedSearchCV
 from sklearn.metrics import mean_squared_log_error
 from sklearn.metrics import get_scorer
 
+# Where to save the figures
+PROJECT_ROOT_DIR = "."
+IMAGES_PATH = os.path.join(PROJECT_ROOT_DIR, "images")
+def save_fig(fig_id, tight_layout=True, fig_extension="png", resolution=300):
+    if not os.path.isdir(IMAGES_PATH):
+        os.makedirs(IMAGES_PATH)
+    path = os.path.join(IMAGES_PATH, fig_id + "." + fig_extension)
+    print("Saving figure", fig_id)
+    if tight_layout:
+        plt.tight_layout()
+    plt.savefig(path, format=fig_extension, dpi=resolution)
+
+
+PROCESSED_PATH = os.path.join(PROJECT_ROOT_DIR, "processed")
+def save_processed(df, filename, extension="csv"):
+    if not os.path.isdir(PROCESSED_PATH):
+        os.makedirs(PROCESSED_PATH)
+    path = os.path.join(PROCESSED_PATH, filename + "." + extension)
+    print("Saving processed dataset", filename)
+    df.to_csv(path, index=False)
+    
+SUBMISSIONS_PATH = os.path.join(PROJECT_ROOT_DIR, "submissions")
+def save_submission(df, filename, extension="csv"):
+    if not os.path.isdir(SUBMISSIONS_PATH):
+        os.makedirs(SUBMISSIONS_PATH)
+    path = os.path.join(SUBMISSIONS_PATH, filename + "." + extension)
+    print("Saving submission", filename)
+    df.to_csv(path, index=False)
+
+MODELS_PATH = os.path.join(PROJECT_ROOT_DIR, "models")
+def store_model(model, filename):
+    if not os.path.isdir(MODELS_PATH):
+        os.makedirs(MODELS_PATH)
+    path = os.path.join(MODELS_PATH, filename + "." + "pkl")
+    print("Saving model", filename)
+    joblib.dump(model, path)
+
 def fetch_data(base_url, file_name, remote_sub_dir=None, file_ext="csv", base_local_path = "raw", local_store_sub_dir=None):
     '''
     Downloads file_name.file_ext from base_url & optional remote_sub_dir and stores it in relative base_local_path & 
@@ -638,7 +675,7 @@ def build_measure_predict(alg, train, test, target, pipelines, remove_identifier
 
         if y_true is not None:
             errors = np.sqrt(scorer(y_true, final_predictions))
-            model_data["test_errors"] = error 
+            model_data["test_errors"] = errors 
     
     if save_model:
         store_model(model_data, model_name)
