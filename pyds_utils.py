@@ -1,7 +1,12 @@
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
 import os
 import scikitplot as skplt
+import tarfile
+from six.moves import urllib
+from sklearn.externals import joblib
 from sklearn.metrics import mean_squared_error
 from sklearn.linear_model import LinearRegression
 from sklearn.linear_model import Ridge
@@ -27,46 +32,40 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import RandomizedSearchCV
 from sklearn.metrics import mean_squared_log_error
 from sklearn.metrics import get_scorer
-from sklearn.externals import joblib
-import matplotlib.pyplot as plt
-import seaborn as sns
 
-# Where to save the figures
-PROJECT_ROOT_DIR = "."
-IMAGES_PATH = os.path.join(PROJECT_ROOT_DIR, "images")
-def save_fig(fig_id, tight_layout=True, fig_extension="png", resolution=300):
-    if not os.path.isdir(IMAGES_PATH):
-        os.makedirs(IMAGES_PATH)
-    path = os.path.join(IMAGES_PATH, fig_id + "." + fig_extension)
-    print("Saving figure", fig_id)
-    if tight_layout:
-        plt.tight_layout()
-    plt.savefig(path, format=fig_extension, dpi=resolution)
-
-
-PROCESSED_PATH = os.path.join(PROJECT_ROOT_DIR, "processed")
-def save_processed(df, filename, extension="csv"):
-    if not os.path.isdir(PROCESSED_PATH):
-        os.makedirs(PROCESSED_PATH)
-    path = os.path.join(PROCESSED_PATH, filename + "." + extension)
-    print("Saving processed dataset", filename)
-    df.to_csv(path, index=False)
+def fetch_data(base_url, file_name, remote_sub_dir=None, file_ext="csv", base_local_path = "raw", local_store_sub_dir=None):
+    '''
+    Downloads file_name.file_ext from base_url & optional remote_sub_dir and stores it in relative base_local_path & 
+    optional local_store_sub_dir. If file is a tarball, it will be extracted as well. 
     
-SUBMISSIONS_PATH = os.path.join(PROJECT_ROOT_DIR, "submissions")
-def save_submission(df, filename, extension="csv"):
-    if not os.path.isdir(SUBMISSIONS_PATH):
-        os.makedirs(SUBMISSIONS_PATH)
-    path = os.path.join(SUBMISSIONS_PATH, filename + "." + extension)
-    print("Saving submission", filename)
-    df.to_csv(path, index=False)
-
-MODELS_PATH = os.path.join(PROJECT_ROOT_DIR, "models")
-def store_model(model, filename):
-    if not os.path.isdir(MODELS_PATH):
-        os.makedirs(MODELS_PATH)
-    path = os.path.join(MODELS_PATH, filename + "." + "pkl")
-    print("Saving model", filename)
-    joblib.dump(model, path)
+    Issues: doesn't work with .csv.gz files  
+    '''
+    if remote_sub_dir is not None:
+        download_url = base_url + remote_sub_dir + file_name + "." + file_ext
+    else:
+        download_url = base_url + file_name + "." + file_ext
+    
+    if not os.path.isdir(base_local_path):
+         os.makedirs(base_local_path)
+            
+    if local_store_sub_dir is not None:
+        local_path = os.path.join(base_local_path, local_store_sub_dir)
+        if not os.path.isdir(local_path):
+            os.makedirs(local_path)
+    else:
+        local_path = os.path.join(base_local_path)
+    
+    
+    full_file_name = file_name + "." + file_ext
+    file_path = os.path.join(local_path, full_file_name)
+    
+    print("Downloading file:", full_file_name)
+    urllib.request.urlretrieve(download_url, file_path)
+    
+    if file_ext in ["tgz", "tar", "gz", "tar.gz"]:
+        data_tgz = tarfile.open(file_path)
+        data_tgz.extractall(path=local_path)
+        data_tgz.close()
 
 def load_data(base_path, file, sub_dir=None, ext="csv", encoding=None):
     filename = file + "." + ext
@@ -119,7 +118,6 @@ def plot_scatters(df, features, target, save_image=False, image_name=None):
     if save_image:
         save_fig(image_name)
            
-
 # Used to explore a single feature on a set of subplots. 
 # Visualise distribution, noise & outliers and missing values as well as correlation with target.
 def explore_variable(df, feature, target, by_categorical=None):
@@ -225,7 +223,6 @@ class AddLevelImputer(BaseEstimator, TransformerMixin):
         else:
             return np.c_[X.fillna(value=self.na_dict)]
     
-from sklearn.base import BaseEstimator, TransformerMixin
 # Inspired from stackoverflow.com/questions/25239958
 
 class MostFrequentImputer(BaseEstimator, TransformerMixin):
@@ -366,17 +363,17 @@ class TopFeatureSelector(BaseEstimator, TransformerMixin):
         return self
     def transform(self, X):
         return X[:, self.feature_indices_]
-def determine_one_hot_cat_features(cat_pipeline, original_cat_features, bool_pipeline, original_bool_features):
-    #print(cat_pipeline)
-    #print(original_cat_features)
-    mappings = {}
-    for feature, levels in zip(original_cat_features, cat_pipeline.named_steps["cat_encoder"].categories_):
-        mappings[feature] = levels
-    for feature, levels in zip(original_bool_features, bool_pipeline.named_steps["bool_encoder"].categories_):
-        mappings[feature] = levels
+
+def determine_one_hot_cat_features(cat_pipeline, original_cat_features, bool_pipeline, original_bool_features):    
+    mappings = []
+    for feature, levels in zip(original_cat_features, cat_pipeline.named_steps["cat_encoder"].categories_):        
+        mappings.append((feature, levels))
+    for feature, levels in zip(original_bool_features, bool_pipeline.named_steps["bool_encoder"].categories_):        
+        mappings.append((feature, levels))
+   
     features_list = []
-    for feature, levels in mappings.items():
-        new_levels = [feature + "_" + str(level) for level in levels]
+    for item in mappings:
+        new_levels = [item[0] + "_" + str(level) for level in item[1]]
         features_list.append(new_levels)
       
     return [feature for group in features_list for feature in group]
@@ -387,61 +384,59 @@ def display_scores(scores):
     print("Standard deviation:", scores.std())
 
 def build_measure_predict(alg, train, test, target, pipelines, remove_identifiers=None, which_features=None, 
-                        which_features_top=10, cv=10, param_search=None, scoring="neg_mean_squared_error", 
-                        show_summary=True, plot_feat_importances=True, how_many_important_features=30,
-                        plot_learning_curve=True, make_predictions=False, y_true=None, prediction_scorer="mean_squared_error",
-                        model_name="model", save_model=False, save_measure_image=False):
-    
+                          which_features_top=10, cv=10, param_search=None, scoring="neg_mean_squared_error", 
+                          show_summary=True, plot_feat_importances=True, how_many_important_features=30,
+                          plot_learning_curve=True, make_predictions=False, y_true=None, prediction_scorer="mean_squared_error",
+                          model_name="model", save_model=False, save_measure_image=False):
+        
     outlier_pipeline = pipelines["outlier_pipeline"]
     feature_add_remove_pipeline = pipelines["feature_add_remove_pipeline"]
     feature_transform_pipeline = pipelines["feature_transform_pipeline"]
     num_pipelines = pipelines["num_pipelines"]
     cat_pipelines = pipelines["cat_pipelines"]
     bool_pipelines = pipelines["bool_pipelines"]
-
+    
     train = train.copy()
-
+    
     if outlier_pipeline is not None:
         train = outlier_pipeline.fit_transform(train)    
 
     if remove_identifiers is not None:
         print("\nRemoving features:", remove_identifiers)
         train = train.drop(remove_identifiers, axis=1)
-
+    
     labels = train[target].copy()   
     train.drop([target], axis=1, inplace=True)
-
+    
     if feature_add_remove_pipeline is not None:
         train = feature_add_remove_pipeline.fit_transform(train)
-
+            
     if feature_transform_pipeline is not None:
         train = feature_transform_pipeline.fit_transform(train)
-
+    
     numeric_feature_names = train.select_dtypes(include=[np.number]).columns.values.tolist()
+    cat_feature_names = train.select_dtypes(include=['object']).columns.values.tolist()   
     bool_feature_names = train.select_dtypes(include=['bool']).columns.values.tolist()
-    cat_feature_names = train.select_dtypes(include=['object']).columns.values.tolist()
-
-
+    
     num_pipeline = Pipeline([("numerics", TypeSelector(np.number, "select", numeric_feature_names))])
-    bool_pipeline = Pipeline([("booleans", TypeSelector('bool', "select", bool_feature_names))])
     cat_pipeline = Pipeline([("categoricals", TypeSelector('object', "select", cat_feature_names))])
-
+    bool_pipeline = Pipeline([("booleans", TypeSelector('bool', "select", bool_feature_names))])
+  
     for pipeline in num_pipelines:
         num_pipeline.steps.append(pipeline)
-        
-    for pipeline in bool_pipelines:
-        bool_pipeline.steps.append(pipeline)
         
     for pipeline in cat_pipelines:
         cat_pipeline.steps.append(pipeline)
         
+    for pipeline in bool_pipelines:
+        bool_pipeline.steps.append(pipeline)
+        
     preprocess_pipeline = FeatureUnion(transformer_list=[
         ("num_pipeline", num_pipeline),
-        ("bool_pipeline", bool_pipeline),
         ("cat_pipeline", cat_pipeline),
-        
+        ("bool_pipeline", bool_pipeline),
     ])
-
+    
     if which_features is not None:
         full_pipeline = Pipeline([
             ('preparation', preprocess_pipeline),
@@ -450,7 +445,7 @@ def build_measure_predict(alg, train, test, target, pipelines, remove_identifier
         
     else:
         full_pipeline = preprocess_pipeline
-
+    
             
     if param_search is not None:
         search_method = param_search["method"]
@@ -465,31 +460,20 @@ def build_measure_predict(alg, train, test, target, pipelines, remove_identifier
             
         elif search_method == "grid":           
             search = GridSearchCV(alg, search_params, cv=search_cv, scoring=search_scoring, verbose=1, n_jobs=-1)
-
+    
     print('\nPreparing data using transformation pipeline...')
     train_prepared = full_pipeline.fit_transform(train)
     print("Data prepared")   
-
-    add_features = feature_add_remove_pipeline.named_steps.get("add_remove_features")
-    if add_features is not None:        
-        features_to_remove = add_features.features_to_remove_       
-        extra_num_features = add_features.new_features_names_
-        
-        if features_to_remove is not None:    
-            
-            numeric_feature_names = [feature for feature in numeric_feature_names if feature not in features_to_remove]
-            
-        complete_feature_list = numeric_feature_names + extra_num_features + determine_one_hot_cat_features(cat_pipeline, cat_feature_names, bool_pipeline, bool_feature_names) 
-    else:
-        complete_feature_list = numeric_feature_names + determine_one_hot_cat_features(cat_pipeline, cat_feature_names, bool_pipeline, bool_feature_names) 
-
+      
+    complete_feature_list = numeric_feature_names + determine_one_hot_cat_features(cat_pipeline, cat_feature_names, bool_pipeline, bool_feature_names) 
+   
     print('\nFitting model to training data...')
     if param_search:
         search.fit(train_prepared, labels)
         alg = search.best_estimator_
     else:
         alg.fit(train_prepared, labels)
-
+    
     if param_search: 
         cvres = search.cv_results_
         for mean_score, params in zip(cvres["mean_test_score"], cvres["params"]):
@@ -502,8 +486,8 @@ def build_measure_predict(alg, train, test, target, pipelines, remove_identifier
         print('\nRunning Cross-Validation...')
         scores = np.sqrt(-cross_val_score(alg, train_prepared, labels, scoring=scoring, cv=cv, verbose=1))
         print('\nCV complete\n')
-
-        
+    
+       
     if feature_add_remove_pipeline is not None and feature_transform_pipeline is not None:
         pipelines = make_pipeline(feature_add_remove_pipeline, feature_transform_pipeline, full_pipeline)
     elif feature_add_remove_pipeline is not None and feature_transform_pipeline is None:
@@ -512,7 +496,7 @@ def build_measure_predict(alg, train, test, target, pipelines, remove_identifier
         pipelines = make_pipeline(feature_transform_pipeline, full_pipeline)
     else:
         pipelines = full_pipeline
-
+    
     model_data = {}
     model_data["model"] = alg
     model_data["features"] = complete_feature_list
@@ -524,7 +508,7 @@ def build_measure_predict(alg, train, test, target, pipelines, remove_identifier
     model_data["target"] = target
     model_data["scoring"] = scoring
     model_data["name"] = model_name
-
+    
     if not isinstance(alg, (LinearRegression, SVR, BaggingRegressor)):
         model_data["feature_importances"] = alg.feature_importances_
         model_data["feature_coef"] = None
@@ -537,7 +521,7 @@ def build_measure_predict(alg, train, test, target, pipelines, remove_identifier
         except AttributeError:
             model_data["oob_score"] = None
     else:
-        model_data["feature_coef"] = alg.coef_
+        model_data["feature_coef"] = alg.coef_        
         model_data["feature_importances"] = None
         model_data["oob_score"] = None
         
@@ -549,13 +533,14 @@ def build_measure_predict(alg, train, test, target, pipelines, remove_identifier
     trans_feature_names = model_data["features"]
     outlier_pipeline =  model_data["outlier_pipeline"]
     scoring =  model_data["scoring"]
-
+    
+    
     ################### Show Model Validation Metrics, Feature Importances & Learning Curve #################
-
+    
     if show_summary:
         print('\nModel Report:')
         print ("\nCV Score : Mean - {:f} | Std - {:f} | Min - {:f} | Max - {:f}".format(np.mean(scores),np.std(scores),
-                                                                                    np.min(scores),np.max(scores)))
+                                                                                  np.min(scores),np.max(scores)))
     if plot_feat_importances & plot_learning_curve:
         num_plots = 2
         fig, ax = plt.subplots(2, 1, figsize=(20,20))
@@ -567,7 +552,7 @@ def build_measure_predict(alg, train, test, target, pipelines, remove_identifier
         fig.subplots_adjust(hspace=0.3)
     else:
         num_plots = 0
-
+    
     if num_plots > 0:
         if num_plots == 1:
             ax1 = ax
@@ -581,13 +566,14 @@ def build_measure_predict(alg, train, test, target, pipelines, remove_identifier
             
             if not isinstance(model, (LinearRegression, MLPRegressor, BaggingRegressor)):
                 skplt.estimators.plot_feature_importances(model, feature_names = trans_feature_names, 
-                                                        max_num_features=how_many_important_features, 
-                                                            x_tick_rotation=60, ax=ax1, title_fontsize="large")
+                                                      max_num_features=how_many_important_features, 
+                                                          x_tick_rotation=60, ax=ax1, title_fontsize="large")
             elif isinstance(model, (BaggingRegressor)):
                 if model_data["oob_score"] is not None:
                     print("Out-of-bag Estimate:", model_data["oob_score"])
 
             elif isinstance(model, (LinearRegression)):
+                
                 num_coeffs = len(model.coef_)
                 neg_coef = pd.Series(model.coef_, trans_feature_names).sort_values().nsmallest(int(num_coeffs*0.05))
                 pos_coef = pd.Series(model.coef_, trans_feature_names).sort_values().nlargest(int(num_coeffs*0.05))
@@ -599,15 +585,15 @@ def build_measure_predict(alg, train, test, target, pipelines, remove_identifier
                 pos_coef = pd.Series(model.coefs_, trans_feature_names).sort_values().nlargest(int(num_coeffs*0.05))
                 coef = neg_coef.append(pos_coef)      
                 coef.plot(kind='bar', title='Feature Coefficients', ax=ax1)      
-                        
+                     
             skplt.estimators.plot_learning_curve(model, train_prepared, labels, scoring=scoring, ax=ax2, 
-                                                    shuffle=True, n_jobs=-1, title_fontsize="large")
+                                                 shuffle=True, n_jobs=-1, title_fontsize="large")
             
         elif plot_feat_importances and not plot_learning_curve:
             if not isinstance(model, (LinearRegression, MLPRegressor, BaggingRegressor)):
                 skplt.estimators.plot_feature_importances(model, feature_names = trans_feature_names, 
-                                                        max_num_features=how_many_important_features, 
-                                                            x_tick_rotation=60, ax=ax1, title_fontsize="large")
+                                                      max_num_features=how_many_important_features, 
+                                                          x_tick_rotation=60, ax=ax1, title_fontsize="large")
             elif isinstance(model, (BaggingRegressor)):
                 if model_data["oob_score"] is not None:
                     print("Out-of-bag Estimate:", model_data["oob_score"])
@@ -624,14 +610,14 @@ def build_measure_predict(alg, train, test, target, pipelines, remove_identifier
                 pos_coef = pd.Series(model.coefs_, trans_feature_names).sort_values().nlargest(int(num_coeffs*0.05))
                 coef = neg_coef.append(pos_coef)      
                 coef.plot(kind='bar', title='Feature Coefficients', ax=ax1)
-            
+           
         elif not plot_feat_importances and plot_learning_curve:
             skplt.estimators.plot_learning_curve(model, train_prepared, labels, scoring=scoring, ax=ax1, 
-                                                    shuffle=True, n_jobs=-1, title_fontsize="large")
+                                                 shuffle=True, n_jobs=-1, title_fontsize="large")
         
         if save_measure_image:
             save_fig(model_name)
-        
+     
     ################# Make predictions on a test set. Compare to y_true if it's available #########  
     if make_predictions:
         test = test.copy()
@@ -653,24 +639,47 @@ def build_measure_predict(alg, train, test, target, pipelines, remove_identifier
         if y_true is not None:
             errors = np.sqrt(scorer(y_true, final_predictions))
             model_data["test_errors"] = error 
-
+    
     if save_model:
         store_model(model_data, model_name)
         
     return model_data
-
-def describe_importances(features, importances): 
-    return sorted(zip(importances, features), reverse=True)
-
-def compare_scores_distribution(scores, titles, y_label):
-    plt.figure(figsize=(20, 9))
-    num_scores = len(scores)
-    for i in range(num_scores):
-        plt.plot([i+1]*len(scores[i]), scores[i], ".")      
-        plt.boxplot(scores, labels=titles)
-        plt.ylabel(y_label, fontsize=14)
-        #plt.ylim(0.1, 0.25)
         
+class SpecificFeaturesAdderRemover(BaseEstimator, TransformerMixin):
+    def __init__(self, feature_adder_params, df_out=False):
+        self.new_features_names = feature_adder_params["new_features_names"]
+        self.features_to_remove = feature_adder_params["features_to_remove"]
+        self.df_out = df_out
+    def fit(self, X, y=None):
+        self.new_features_names_ = self.new_features_names
+        self.features_to_remove_ = self.features_to_remove
+        self.original_df_columns_ = X.columns
+        self.original_df_ = X
+        return self  # nothing else to do
+    def transform(self, X, y=None):
+        X["HasRemod"] = X["YearBuilt"] != X["YearRemodAdd"] 
+        X["YearSinceRemod"] = X["YearRemodAdd"] - X["YearBuilt"]
+        X["YearSinceBuilt"] = X["YrSold"] -  X["YearBuilt"]
+        X["YearBtwSoldRemod"] = X["YrSold"] - X["YearRemodAdd"]
+        
+        X["HasEnclosedPorch"] = X["EnclosedPorch"] != 0
+        
+        X["GrLivAreaBucket"] = X["GrLivArea"] // 1000 * 1000
+        X["TotalBsmtSFBucket"] = X["TotalBsmtSF"] // 1000 * 1000
+        X["GarageAreaBucket"] = X["GarageArea"] // 350 * 350
+        X["BsmtFinSF1Bucket"] = X["BsmtFinSF1"] // 400 * 400
+        X["1stFlrSFBucket"] = X["1stFlrSF"] // 800 * 800
+        X["LotAreaBucket"] = X["LotArea"] // 20000 * 20000
+        X["MasVnrAreaBucket"] = X["MasVnrArea"] // 500 * 500
+        
+        if self.features_to_remove is not None:           
+            X = X.drop(self.features_to_remove_, axis=1)            
+            
+        if self.df_out:
+            return X
+        else:
+            return np.c_[X]
+
 def compare_scores(models, show_plot=True):
         df = pd.DataFrame.from_records([(model["name"], np.mean(model["scores"])) for model in models], columns=["Model", "Score"],
                                        index="Model")
@@ -680,3 +689,13 @@ def compare_scores(models, show_plot=True):
             df.plot.barh(figsize=(12,8))
         
         return df
+
+def compare_scores_distribution(scores, titles, y_label):
+    plt.figure(figsize=(20, 9))
+    num_scores = len(scores)
+    for i in range(num_scores):
+        plt.plot([i+1]*len(scores[i]), scores[i], ".")      
+        plt.boxplot(scores, labels=titles)
+        plt.ylabel(y_label, fontsize=14)
+        #plt.ylim(0.1, 0.25)
+
